@@ -12,6 +12,7 @@ from .agility import *
 from .allegro import *
 from .ant import *
 from .anymal import *
+from .ar4 import *
 from .cart_double_pendulum import *
 from .cartpole import *
 from .cassie import *
@@ -30,3 +31,7 @@ from .shadow_hand import *
 from .spot import *
 from .unitree import *
 from .universal_robots import *
+
+from .ar44 import *
+from .ar4_mk3 import *
+

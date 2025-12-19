@@ -25,7 +25,7 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.noise import AdditiveUniformNoiseCfg as Unoise
 
-import isaaclab_tasks.manager_based.manipulation.reach.mdp as mdp
+import isaaclab_tasks.manager_based.manipulation.osc_gain_tuner.mdp as mdp
 
 ##
 # Scene definition
@@ -33,7 +33,7 @@ import isaaclab_tasks.manager_based.manipulation.reach.mdp as mdp
 
 
 @configclass
-class ReachSceneCfg(InteractiveSceneCfg):
+class OSCGainTunerSceneCfg(InteractiveSceneCfg):
     """Configuration for the scene with a robotic arm."""
 
     # world
@@ -74,11 +74,11 @@ class CommandsCfg:
         asset_name="robot",
         body_name=MISSING,
         resampling_time_range=(4.0, 4.0),
-        debug_vis=False,
+        debug_vis=True,
         ranges=mdp.UniformPoseCommandCfg.Ranges(
-            pos_x=(0.35, 0.65),
-            pos_y=(-0.2, 0.2),
-            pos_z=(0.15, 0.5),
+            pos_x=(0.30, 0.50),  # AR4 safe reach approx 30-50cm
+            pos_y=(0.05, 0.25),
+            pos_z=(0.1, 0.45),
             roll=(0.0, 0.0),
             pitch=MISSING,  # depends on end-effector axis
             yaw=(-3.14, 3.14),
@@ -153,10 +153,44 @@ class RewardsCfg:
 
     # action penalty
     action_rate = RewTerm(func=mdp.action_rate_l2, weight=-0.0001)
+
+    # smoothness rewards - encourage stable, smooth motion
+    end_effector_velocity_penalty = RewTerm(
+        func=mdp.ee_linear_velocity_l2,
+        weight=-0.01,
+        params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING)},
+    )
+    # end_effector_acceleration_penalty = RewTerm(
+    #     func=mdp.ee_linear_acceleration_l2,
+    #     weight=-0.02,
+    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING)},
+    # )
+    # end_effector_jerk_penalty = RewTerm(
+    #     func=mdp.end_effector_jerk_l2,
+    #     weight=-0.05,
+    #     params={"asset_cfg": SceneEntityCfg("robot", body_names=MISSING)},
+    # )
+    
+    # # joint level smoothness
     joint_vel = RewTerm(
         func=mdp.joint_vel_l2,
         weight=-0.0001,
         params={"asset_cfg": SceneEntityCfg("robot")},
+    )
+    # joint_accel = RewTerm(
+    #     func=mdp.joint_accel_l2,
+    #     weight=-0.005,
+    #     params={"asset_cfg": SceneEntityCfg("robot")},
+    # )
+    
+    # OSC gain penalties - discourage extreme gain values
+    stiffness_penalty = RewTerm(
+            func=mdp.stiffness_penalty,
+            weight=-0.001,
+        )
+    damping_penalty = RewTerm(
+            func=mdp.damping_penalty,
+        weight=-0.0005,
     )
 
 
@@ -186,11 +220,11 @@ class CurriculumCfg:
 
 
 @configclass
-class ReachEnvCfg(ManagerBasedRLEnvCfg):
-    """Configuration for the reach end-effector pose tracking environment."""
+class OSCGainTunerEnvCfg(ManagerBasedRLEnvCfg):
+    """Configuration for the OSCGainTuner end-effector pose tracking environment."""
 
     # Scene settings
-    scene: ReachSceneCfg = ReachSceneCfg(num_envs=4096, env_spacing=2.5)
+    scene: OSCGainTunerSceneCfg = OSCGainTunerSceneCfg(num_envs=4096, env_spacing=2.5)
     # Basic settings
     observations: ObservationsCfg = ObservationsCfg()
     actions: ActionsCfg = ActionsCfg()

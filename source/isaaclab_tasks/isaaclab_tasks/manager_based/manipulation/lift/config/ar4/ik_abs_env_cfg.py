@@ -13,14 +13,13 @@ from isaaclab.utils import configclass
 from isaaclab.utils.assets import ISAACLAB_NUCLEUS_DIR
 
 import isaaclab_tasks.manager_based.manipulation.lift.mdp as mdp
-from isaaclab.sensors import FrameTransformerCfg
-from isaaclab.sensors.frame_transformer.frame_transformer_cfg import OffsetCfg
+
 from . import joint_pos_env_cfg
 
 ##
 # Pre-defined configs
 ##
-from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: skip
+from isaaclab_assets.robots.ar4_mk3 import AR4_MK3_PD_CFG  # isort: skip
 
 
 ##
@@ -29,28 +28,27 @@ from isaaclab_assets.robots.franka import FRANKA_PANDA_HIGH_PD_CFG  # isort: ski
 
 
 @configclass
-class FrankaCubeLiftEnvCfg(joint_pos_env_cfg.FrankaCubeLiftEnvCfg):
+class AR4MK3CubeLiftEnvCfg(joint_pos_env_cfg.AR4MK3CubeLiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
 
         # Set Franka as robot
         # We switch here to a stiffer PD controller for IK tracking to be better.
-        self.scene.robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
+        self.scene.robot = AR4_MK3_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
 
         # Set actions for the specific robot type (franka)
         self.actions.arm_action = DifferentialInverseKinematicsActionCfg(
             asset_name="robot",
-            joint_names=["panda_joint.*"],
-            body_name="panda_hand",
+            joint_names=["joint_.*"],
+            body_name="gripper_base_link",
             controller=DifferentialIKControllerCfg(command_type="pose", use_relative_mode=False, ik_method="dls"),
             body_offset=DifferentialInverseKinematicsActionCfg.OffsetCfg(pos=[0.0, 0.0, 0.107]),
         )
 
 
-
 @configclass
-class FrankaCubeLiftEnvCfg_PLAY(FrankaCubeLiftEnvCfg):
+class AR4MK3CubeLiftEnvCfg_PLAY(AR4MK3CubeLiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
@@ -67,7 +65,7 @@ class FrankaCubeLiftEnvCfg_PLAY(FrankaCubeLiftEnvCfg):
 
 
 @configclass
-class FrankaTeddyBearLiftEnvCfg(FrankaCubeLiftEnvCfg):
+class  AR4MK3TeddyBearLiftEnvCfg(AR4MK3CubeLiftEnvCfg):
     def __post_init__(self):
         # post init of parent
         super().__post_init__()
@@ -82,9 +80,9 @@ class FrankaTeddyBearLiftEnvCfg(FrankaCubeLiftEnvCfg):
         )
 
         # Make the end effector less stiff to not hurt the poor teddy bear
-        self.scene.robot.actuators["panda_hand"].effort_limit_sim = 50.0
-        self.scene.robot.actuators["panda_hand"].stiffness = 40.0
-        self.scene.robot.actuators["panda_hand"].damping = 10.0
+        self.scene.robot.actuators["gripper_base_link"].effort_limit_sim = 50.0
+        self.scene.robot.actuators["gripper_base_link"].stiffness = 40.0
+        self.scene.robot.actuators["gripper_base_link"].damping = 10.0
 
         # Disable replicate physics as it doesn't work for deformable objects
         # FIXME: This should be fixed by the PhysX replication system.

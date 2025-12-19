@@ -57,7 +57,7 @@ from isaaclab.utils.math import (
 ##
 # Pre-defined configs
 ##
-from isaaclab_assets import FRANKA_PANDA_HIGH_PD_CFG  # isort:skip
+from isaaclab_assets import AR4_OSC_CFG  # isort:skip
 
 
 @configclass
@@ -97,11 +97,7 @@ class SceneCfg(InteractiveSceneCfg):
         debug_vis=False,
     )
 
-    robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    robot.actuators["panda_shoulder"].stiffness = 0.0
-    robot.actuators["panda_shoulder"].damping = 0.0
-    robot.actuators["panda_forearm"].stiffness = 0.0
-    robot.actuators["panda_forearm"].damping = 0.0
+    robot = AR4_OSC_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     robot.spawn.rigid_props.disable_gravity = True
 
 
@@ -118,8 +114,8 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     contact_forces = scene["contact_forces"]
 
     # Obtain indices for the end-effector and arm joints
-    ee_frame_name = "panda_leftfinger"
-    arm_joint_names = ["panda_joint.*"]
+    ee_frame_name = "end_effector"
+    arm_joint_names = ["Joint.*"]
     ee_frame_idx = robot.find_bodies(ee_frame_name)[0][0]
     arm_joint_ids = robot.find_joints(arm_joint_names)[0]
 
@@ -247,7 +243,6 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                 joint_pos,
                 joint_vel,
             ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids, contact_forces)
-            # compute the joint commands
             joint_efforts = osc.compute(
                 jacobian_b=jacobian_b,
                 current_ee_pose_b=ee_pose_b,

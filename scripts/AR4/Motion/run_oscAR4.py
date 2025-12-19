@@ -37,6 +37,7 @@ simulation_app = app_launcher.app
 """Rest everything follows."""
 
 import torch
+from scipy.spatial.transform import Rotation as R
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, AssetBaseCfg
@@ -57,14 +58,14 @@ from isaaclab.utils.math import (
 ##
 # Pre-defined configs
 ##
-from isaaclab_assets import FRANKA_PANDA_HIGH_PD_CFG  # isort:skip
+from isaaclab_assets import AR4_PD_CFG   # isort:skip
 
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
     """Configuration for a simple scene with a tilted wall."""
 
-    # ground plane
+      # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/defaultGroundPlane",
         spawn=sim_utils.GroundPlaneCfg(),
@@ -97,11 +98,7 @@ class SceneCfg(InteractiveSceneCfg):
         debug_vis=False,
     )
 
-    robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    robot.actuators["panda_shoulder"].stiffness = 0.0
-    robot.actuators["panda_shoulder"].damping = 0.0
-    robot.actuators["panda_forearm"].stiffness = 0.0
-    robot.actuators["panda_forearm"].damping = 0.0
+    robot = AR4_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     robot.spawn.rigid_props.disable_gravity = True
 
 
@@ -118,11 +115,11 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
     contact_forces = scene["contact_forces"]
 
     # Obtain indices for the end-effector and arm joints
-    ee_frame_name = "panda_leftfinger"
-    arm_joint_names = ["panda_joint.*"]
+    ee_frame_name = "end_effector"
+    arm_joint_names = ["Joint.*"]
     ee_frame_idx = robot.find_bodies(ee_frame_name)[0][0]
     arm_joint_ids = robot.find_joints(arm_joint_names)[0]
-
+    
     # Create the OSC
     osc_cfg = OperationalSpaceControllerCfg(
         target_types=["pose_abs", "wrench_abs"],
@@ -134,7 +131,7 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
         contact_wrench_stiffness_task=[0.0, 0.0, 0.1, 0.0, 0.0, 0.0],
         motion_control_axes_task=[1, 1, 0, 1, 1, 1],
         contact_wrench_control_axes_task=[0, 0, 1, 0, 0, 0],
-        # nullspace_control="position",
+        nullspace_control="none",
     )
     osc = OperationalSpaceController(osc_cfg, num_envs=scene.num_envs, device=sim.device)
 

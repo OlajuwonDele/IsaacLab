@@ -1,30 +1,10 @@
-# Copyright (c) 2022-2025, The Isaac Lab Project Developers (https://github.com/isaac-sim/IsaacLab/blob/main/CONTRIBUTORS.md).
-# All rights reserved.
-#
-# SPDX-License-Identifier: BSD-3-Clause
-
-"""
-This script demonstrates how to use the operational space controller (OSC) with the simulator.
-
-The OSC controller can be configured in different modes. It uses the dynamical quantities such as Jacobians and
-mass matricescomputed by PhysX.
-
-.. code-block:: bash
-
-    # Usage
-    ./isaaclab.sh -p scripts/tutorials/05_controllers/run_osc.py
-
-"""
-
-"""Launch Isaac Sim Simulator first."""
-
 import argparse
 
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Tutorial on using the operational space controller.")
-parser.add_argument("--num_envs", type=int, default=128, help="Number of environments to spawn.")
+parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -34,10 +14,14 @@ args_cli = parser.parse_args()
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-"""Rest everything follows."""
+from isaaclab.sim import SimulationContext
+from isaaclab.assets import Articulation
+from isaaclab.controllers import OperationalSpaceController, OperationalSpaceControllerCfg
 
 import torch
-
+from scipy.spatial.transform import Rotation as R
+import pandas as pd
+import numpy as np
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, AssetBaseCfg
 from isaaclab.controllers import OperationalSpaceController, OperationalSpaceControllerCfg
@@ -54,17 +38,10 @@ from isaaclab.utils.math import (
     subtract_frame_transforms,
 )
 
-##
-# Pre-defined configs
-##
-from isaaclab_assets import FRANKA_PANDA_HIGH_PD_CFG  # isort:skip
-
+from isaaclab_assets import AR4_MK3_OSC_CFG  
 
 @configclass
 class SceneCfg(InteractiveSceneCfg):
-    """Configuration for a simple scene with a tilted wall."""
-
-    # ground plane
     ground = AssetBaseCfg(
         prim_path="/World/defaultGroundPlane",
         spawn=sim_utils.GroundPlaneCfg(),
@@ -75,143 +52,105 @@ class SceneCfg(InteractiveSceneCfg):
         prim_path="/World/Light", spawn=sim_utils.DomeLightCfg(intensity=3000.0, color=(0.75, 0.75, 0.75))
     )
 
-    # Tilted wall
-    tilted_wall = AssetBaseCfg(
-        prim_path="{ENV_REGEX_NS}/TiltedWall",
-        spawn=sim_utils.CuboidCfg(
-            size=(2.0, 1.5, 0.01),
-            collision_props=sim_utils.CollisionPropertiesCfg(),
-            visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0), opacity=0.1),
-            rigid_props=sim_utils.RigidBodyPropertiesCfg(kinematic_enabled=True),
-            activate_contact_sensors=True,
-        ),
-        init_state=AssetBaseCfg.InitialStateCfg(
-            pos=(0.6 + 0.085, 0.0, 0.3), rot=(0.9238795325, 0.0, -0.3826834324, 0.0)
-        ),
-    )
-
-    contact_forces = ContactSensorCfg(
-        prim_path="/World/envs/env_.*/TiltedWall",
-        update_period=0.0,
-        history_length=2,
-        debug_vis=False,
-    )
-
-    robot = FRANKA_PANDA_HIGH_PD_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
-    robot.actuators["panda_shoulder"].stiffness = 0.0
-    robot.actuators["panda_shoulder"].damping = 0.0
-    robot.actuators["panda_forearm"].stiffness = 0.0
-    robot.actuators["panda_forearm"].damping = 0.0
+    robot = AR4_MK3_OSC_CFG.replace(prim_path="{ENV_REGEX_NS}/Robot")
     robot.spawn.rigid_props.disable_gravity = True
 
 
 def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
-    """Runs the simulation loop.
-
-    Args:
-        sim: (SimulationContext) Simulation context.
-        scene: (InteractiveScene) Interactive scene.
-    """
-
     # Extract scene entities for readability.
     robot = scene["robot"]
-    contact_forces = scene["contact_forces"]
+    df = pd.read_excel("C:/Users/juwon/Documents/Robotics/TCD Research/Annin package/annin_sample_trajectory_100_3.xlsx")
+    # positions
+    xyz = (df[['X', 'Y', 'Z']]).to_numpy()
 
-    # Obtain indices for the end-effector and arm joints
-    ee_frame_name = "panda_leftfinger"
-    arm_joint_names = ["panda_joint.*"]
-    ee_frame_idx = robot.find_bodies(ee_frame_name)[0][0]
-    arm_joint_ids = robot.find_joints(arm_joint_names)[0]
-
+    # constant orientation for each waypoint (w, x, y, z)
+    quat = np.tile(np.array([[0.7071, 0.70711, 0, 0]]), (xyz.shape[0], 1))
+    target_pose = torch.tensor(np.hstack((xyz, quat)), dtype=torch.float32, device=sim.device)
+    target_pose_w = target_pose.clone()
+    
     # Create the OSC
     osc_cfg = OperationalSpaceControllerCfg(
-        target_types=["pose_abs", "wrench_abs"],
-        impedance_mode="variable_kp",
+        target_types=["pose_abs"],
+        impedance_mode="fixed",
         inertial_dynamics_decoupling=True,
         partial_inertial_dynamics_decoupling=False,
         gravity_compensation=False,
         motion_damping_ratio_task=1.0,
         contact_wrench_stiffness_task=[0.0, 0.0, 0.1, 0.0, 0.0, 0.0],
-        motion_control_axes_task=[1, 1, 0, 1, 1, 1],
+        motion_control_axes_task=[1, 1, 1, 1, 1, 1],
         contact_wrench_control_axes_task=[0, 0, 1, 0, 0, 0],
-        # nullspace_control="position",
+        nullspace_control="none",
     )
     osc = OperationalSpaceController(osc_cfg, num_envs=scene.num_envs, device=sim.device)
 
-    # Markers
-    frame_marker_cfg = FRAME_MARKER_CFG.copy()
-    frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
-    ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
-    goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
+    
+    # Obtain indices for the end-effector and arm joints
+    # entity = SceneEntityCfg("robot", joint_names=["Joint.*"], body_names=["end_effector"])
+    # entity.resolve(scene)
+    # ee_body_id = entity.body_ids[0]
+    # joint_ids = entity.joint_ids
 
-    # Define targets for the arm
-    ee_goal_pose_set_tilted_b = torch.tensor(
-        [
-            [0.6, 0.15, 0.3, 0.0, 0.92387953, 0.0, 0.38268343],
-            [0.6, -0.3, 0.3, 0.0, 0.92387953, 0.0, 0.38268343],
-            [0.8, 0.0, 0.5, 0.0, 0.92387953, 0.0, 0.38268343],
-        ],
-        device=sim.device,
-    )
-    ee_goal_wrench_set_tilted_task = torch.tensor(
-        [
-            [0.0, 0.0, 10.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 10.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, 10.0, 0.0, 0.0, 0.0],
-        ],
-        device=sim.device,
-    )
-    kp_set_task = torch.tensor(
-        [
-            [360.0, 360.0, 360.0, 360.0, 360.0, 360.0],
-            [420.0, 420.0, 420.0, 420.0, 420.0, 420.0],
-            [320.0, 320.0, 320.0, 320.0, 320.0, 320.0],
-        ],
-        device=sim.device,
-    )
-    ee_target_set = torch.cat([ee_goal_pose_set_tilted_b, ee_goal_wrench_set_tilted_task, kp_set_task], dim=-1)
+    ee_frame_name = "gripper_base_link"
+    arm_joint_names = ["joint_.*"]
+    ee_frame_idx = robot.find_bodies(ee_frame_name)[0][0]
+    arm_joint_ids = robot.find_joints(arm_joint_names)[0]
 
     # Define simulation stepping
     sim_dt = sim.get_physics_dt()
 
-    # Update existing buffers
-    # Note: We need to update buffers before the first step for the controller.
+    N = scene.num_envs
     robot.update(dt=sim_dt)
 
-    # Get the center of the robot soft joint limits
     joint_centers = torch.mean(robot.data.soft_joint_pos_limits[:, arm_joint_ids, :], dim=-1)
-
     # get the updated states
     (
-        jacobian_b,
-        mass_matrix,
-        gravity,
-        ee_pose_b,
-        ee_vel_b,
-        root_pose_w,
-        ee_pose_w,
-        ee_force_b,
-        joint_pos,
-        joint_vel,
-    ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids, contact_forces)
+            jacobian_b,
+            mass_matrix,
+            gravity,
+            ee_pose_b,
+            ee_vel_b,
+            root_pose_w,
+            ee_pose_w,
+            # ee_force_b,
+            joint_pos,
+            joint_vel,
+        ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids)
 
-    # Track the given target command
-    current_goal_idx = 0  # Current goal index for the arm
     command = torch.zeros(
         scene.num_envs, osc.action_dim, device=sim.device
     )  # Generic target command, which can be pose, position, force, etc.
     ee_target_pose_b = torch.zeros(scene.num_envs, 7, device=sim.device)  # Target pose in the body frame
-    ee_target_pose_w = torch.zeros(scene.num_envs, 7, device=sim.device)  # Target pose in the world frame (for marker)
+    ee_target_pose_w = torch.zeros(scene.num_envs, 7, device=sim.device)
 
     # Set joint efforts to zero
     zero_joint_efforts = torch.zeros(scene.num_envs, robot.num_joints, device=sim.device)
     joint_efforts = torch.zeros(scene.num_envs, len(arm_joint_ids), device=sim.device)
 
+    
+    # target_pose = robot.data.default_root_state[:7].clone()
+    k_values = [100, 200, 300, 400, 500, 600, 700, 800]
+    d_values = [0.5, 0.7, 1.0, 1.2, 2, 3, 5, 10]
+
+    # create marker objects (you already do this)
+    frame_marker_cfg = FRAME_MARKER_CFG.copy()
+    frame_marker_cfg.markers["frame"].scale = (0.1, 0.1, 0.1)
+    ee_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_current"))
+    goal_marker = VisualizationMarkers(frame_marker_cfg.replace(prim_path="/Visuals/ee_goal"))
+
     count = 0
-    # Simulation loop
+
+    command, ee_target_pose_b,  ee_target_pose_w = update_target(
+                sim, scene, osc, root_pose_w, target_pose)
+    command, task_frame_pose_b = convert_to_task_frame(osc, command=command, ee_target_pose_b=ee_target_pose_b)
+       
+    osc.reset()
+    osc.set_command(command=command, current_ee_pose_b=ee_pose_b, current_task_frame_pose_b=task_frame_pose_b)
+
     while simulation_app.is_running():
-        # reset every 500 steps
-        if count % 500 == 0:
+        if count == 500:
+            count = 0
+
+        if count == 0:
             # reset joint state to default
             default_joint_pos = robot.data.default_joint_pos.clone()
             default_joint_vel = robot.data.default_joint_vel.clone()
@@ -220,21 +159,39 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
             robot.write_data_to_sim()
             robot.reset()
             # reset contact sensor
-            contact_forces.reset()
+            k = k_values[(count // 400) % len(k_values)]
+            d = d_values[(count // 400) % len(d_values)]
+
+            osc_cfg.motion_stiffness_task = [k, k, k, 30, 30, 30]
+            osc_cfg.motion_damping_ratio_task = d
+
+            osc = OperationalSpaceController(osc_cfg, num_envs=scene.num_envs, device=sim.device)
+            print(f"[TUNE] stiffness={k}, damping={d}")
             # reset target pose
             robot.update(sim_dt)
-            _, _, _, ee_pose_b, _, _, _, _, _, _ = update_states(
-                sim, scene, robot, ee_frame_idx, arm_joint_ids, contact_forces
-            )  # at reset, the jacobians are not updated to the latest state
-            command, ee_target_pose_b, ee_target_pose_w, current_goal_idx = update_target(
-                sim, scene, osc, root_pose_w, ee_target_set, current_goal_idx
-            )
+            (
+            jacobian_b,
+            mass_matrix,
+            gravity,
+            ee_pose_b,
+            ee_vel_b,
+            root_pose_w,
+            ee_pose_w,
+            # ee_force_b,
+            joint_pos,
+            joint_vel,
+        ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids)
             # set the osc command
-            osc.reset()
+            command, ee_target_pose_b,  ee_target_pose_w = update_target(
+                sim, scene, osc, root_pose_w, target_pose)
             command, task_frame_pose_b = convert_to_task_frame(osc, command=command, ee_target_pose_b=ee_target_pose_b)
+            
+            osc.reset()
             osc.set_command(command=command, current_ee_pose_b=ee_pose_b, current_task_frame_pose_b=task_frame_pose_b)
+            count += 1
         else:
             # get the updated states
+            count += 1
             (
                 jacobian_b,
                 mass_matrix,
@@ -243,16 +200,14 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                 ee_vel_b,
                 root_pose_w,
                 ee_pose_w,
-                ee_force_b,
                 joint_pos,
                 joint_vel,
-            ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids, contact_forces)
+            ) = update_states(sim, scene, robot, ee_frame_idx, arm_joint_ids)
             # compute the joint commands
             joint_efforts = osc.compute(
                 jacobian_b=jacobian_b,
                 current_ee_pose_b=ee_pose_b,
                 current_ee_vel_b=ee_vel_b,
-                current_ee_force_b=ee_force_b,
                 mass_matrix=mass_matrix,
                 gravity=gravity,
                 current_joint_pos=joint_pos,
@@ -260,21 +215,43 @@ def run_simulator(sim: sim_utils.SimulationContext, scene: InteractiveScene):
                 nullspace_joint_pos_target=joint_centers,
             )
             # apply actions
+
             robot.set_joint_effort_target(joint_efforts, joint_ids=arm_joint_ids)
             robot.write_data_to_sim()
+            robot.update(sim_dt)
+            sim.step()
 
-        # update marker positions
-        ee_marker.visualize(ee_pose_w[:, 0:3], ee_pose_w[:, 3:7])
-        goal_marker.visualize(ee_target_pose_w[:, 0:3], ee_target_pose_w[:, 3:7])
+        if count % 100 == 0:
+            # Error handling for gains
+            print(f"Position error [xyz] = {target_pose_w - ee_pose_w}")
+            # Print the Z-height error
+            z_error = ee_target_pose_w[0, 2] - ee_pose_w[0, 2]
+            print(f"Height Error: {z_error:.4f} m")
+            
+            # Check if we are maxing out torque on the shoulder
+            # Note: Adjust index '1' if Joint2 is at a different index in arm_joint_ids
+            print(f"joint 2: {joint_efforts[0, 0]:.2f} Nm")
+            print(f"joint 2: {joint_efforts[0, 1]:.2f} Nm")
+            print(f"joint 2: {joint_efforts[0, 2]:.2f} Nm")
+            print(f"joint 2: {joint_efforts[0, 3]:.2f} Nm")
+            print(f"joint 2: {joint_efforts[0, 4]:.2f} Nm")
+            print(f"joint 2: {joint_efforts[0, 5]:.2f} Nm")
 
-        # perform step
-        sim.step(render=True)
-        # update robot buffers
-        robot.update(sim_dt)
-        # update buffers
-        scene.update(sim_dt)
-        # update sim-time
-        count += 1
+
+        ee_trans = ee_pose_w[:,:3].cpu().numpy()
+        ee_orient = ee_pose_w[:, 3:7].cpu().numpy()
+
+        goal_trans = ee_target_pose_w[:,:3].cpu().numpy()
+        goal_orient = ee_target_pose_w[:, 3:7].cpu().numpy()             
+
+        # if count % 100 == 0:  # Print every 100 steps
+        #     print(f"Step {count}")
+        #     print(f"  Position errors (m): min={pos_error.min():.4f}, max={pos_error.max():.4f}, mean={pos_error.mean():.4f}")
+        #     print(f"  Joint efforts: min={joint_efforts.min():.2f}, max={joint_efforts.max():.2f}")
+        #     print(f"  EE velocity: {torch.norm(ee_vel_b[:, :3], dim=1).mean():.4f} m/s")
+
+        ee_marker.visualize(translations=ee_trans, orientations=ee_orient)
+        goal_marker.visualize(translations=goal_trans, orientations=goal_orient)
 
 
 # Update robot states
@@ -284,7 +261,6 @@ def update_states(
     robot: Articulation,
     ee_frame_idx: int,
     arm_joint_ids: list[int],
-    contact_forces,
 ):
     """Update the robot states.
 
@@ -343,13 +319,13 @@ def update_states(
     # Calculate the contact force
     ee_force_w = torch.zeros(scene.num_envs, 3, device=sim.device)
     sim_dt = sim.get_physics_dt()
-    contact_forces.update(sim_dt)  # update contact sensor
+    # contact_forces.update(sim_dt)  # update contact sensor
     # Calculate the contact force by averaging over last four time steps (i.e., to smoothen) and
     # taking the max of three surfaces as only one should be the contact of interest
-    ee_force_w, _ = torch.max(torch.mean(contact_forces.data.net_forces_w_history, dim=1), dim=1)
+    # ee_force_w, _ = torch.max(torch.mean(contact_forces.data.net_forces_w_history, dim=1), dim=1)
 
     # This is a simplification, only for the sake of testing.
-    ee_force_b = ee_force_w
+    # ee_force_b = ee_force_w
 
     # Get joint positions and velocities
     joint_pos = robot.data.joint_pos[:, arm_joint_ids]
@@ -363,7 +339,7 @@ def update_states(
         ee_vel_b,
         root_pose_w,
         ee_pose_w,
-        ee_force_b,
+        # ee_force_b,
         joint_pos,
         joint_vel,
     )
@@ -375,8 +351,7 @@ def update_target(
     scene: InteractiveScene,
     osc: OperationalSpaceController,
     root_pose_w: torch.tensor,
-    ee_target_set: torch.tensor,
-    current_goal_idx: int,
+    goals: torch.tensor,
 ):
     """Update the targets for the operational space controller.
 
@@ -400,7 +375,15 @@ def update_target(
 
     # update the ee desired command
     command = torch.zeros(scene.num_envs, osc.action_dim, device=sim.device)
-    command[:] = ee_target_set[current_goal_idx]
+    pos_b, quat_b = subtract_frame_transforms(
+    root_pose_w[:, :3],
+    root_pose_w[:, 3:],
+    goals[:, :3],
+    goals[:, 3:7]
+    )
+
+    command[:, :3] = pos_b
+    command[:, 3:7] = quat_b
 
     # update the ee desired pose
     ee_target_pose_b = torch.zeros(scene.num_envs, 7, device=sim.device)
@@ -418,9 +401,8 @@ def update_target(
     )
     ee_target_pose_w = torch.cat([ee_target_pos_w, ee_target_quat_w], dim=-1)
 
-    next_goal_idx = (current_goal_idx + 1) % len(ee_target_set)
+    return command, ee_target_pose_b, ee_target_pose_w
 
-    return command, ee_target_pose_b, ee_target_pose_w, next_goal_idx
 
 
 # Convert the target commands to the task frame
